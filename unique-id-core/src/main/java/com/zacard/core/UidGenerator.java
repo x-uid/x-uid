@@ -2,7 +2,6 @@ package com.zacard.core;
 
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
@@ -15,10 +14,21 @@ import java.util.concurrent.locks.ReentrantLock;
  */
 public class UidGenerator {
 
+    private static final int PROCESSORS = Runtime.getRuntime().availableProcessors();
+
     private static final IdWorker ID_WORKER = new IdWorker();
 
     public static long generateId() {
         return ID_WORKER.nextId();
+    }
+
+    /**
+     * 判断id_worker是否busy
+     *
+     * @param busyFlag busy的参考基准
+     */
+    public static boolean isBusy(int busyFlag) {
+        return ID_WORKER.lock.getQueueLength() > Math.min(busyFlag, PROCESSORS + 1);
     }
 
     /**
@@ -123,7 +133,7 @@ public class UidGenerator {
          */
         private long maxTolerateCallbackTime = DEFAULT_MAX_TOLERATE_CALLBACK_TIME;
 
-        private final Lock lock;
+        private final ReentrantLock lock;
 
         private IdWorker() {
             this(reloadWorkerId());
@@ -241,9 +251,9 @@ public class UidGenerator {
     }
 
     public static void main(String[] args) {
-        for (int i = 0; i < 10; i++) {
-            System.out.println(UidGenerator.generateId());
-        }
+//        for (int i = 0; i < 10; i++) {
+//            System.out.println(UidGenerator.generateId());
+//        }
     }
 
 }

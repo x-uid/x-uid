@@ -1,16 +1,15 @@
 package com.zacard.core.cache;
 
 import com.zacard.core.UidGenerator;
+import com.zacard.core.file.UidPersistence;
 import com.zacard.core.queue.DistinctLinkedBlockingQueue;
+import com.zacard.core.threadpool.InternalThreadFactory;
 import sun.misc.Unsafe;
 
 import java.lang.reflect.Field;
 import java.security.AccessController;
 import java.security.PrivilegedExceptionAction;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -82,9 +81,36 @@ public class IdCacheWorker {
     private ExecutorService threadPool;
 
     /**
+     * 线程池中最大线程数
+     */
+//    private int maxThreads = 4;
+
+    /**
+     * 普通nextId重试次数
+     */
+    private int maxRetry = 5;
+
+    /**
      * 线程池队列任务数量
      */
     private int threadPoolQueueSize = 128;
+
+    /**
+     * cacha queue，保存原始long型的id
+     */
+    private ArrayBlockingQueue<Long> cacheIds;
+
+    /**
+     * uid持久化到文件服务
+     */
+    private UidPersistence uidPersistence;
+
+    /**
+     * 判断变种snowflake的生成id是否繁忙的参考值
+     * <p>
+     * 等待的线程数
+     */
+    private int busyFlag = 4;
 
     public IdCacheWorker() {
         this(DEFAULT_BUFFER_SIZE);
@@ -105,9 +131,13 @@ public class IdCacheWorker {
         this.partitionSize = threshold / partitionNumber;
         this.partitionSizeMask = partitionSize - 1;
         this.threadPool = initThreadPool();
+        // 因为在cache queue中，id无缓存行填充，size可以设置的大一点(默认4倍)
+        this.cacheIds = new ArrayBlockingQueue<>(Math.min(threshold << 2, MAXIMUM_SIZE));
 
         // 初始化填充缓存区
         fillBuffer();
+        // id文件持久化初始化
+        this.uidPersistence = new UidPersistence();
     }
 
     /**
@@ -137,16 +167,21 @@ public class IdCacheWorker {
     public long nextId() {
         // TODO
         // 0.先尝试去缓存区中获取数据
-        int index = nextIndex(true);
-        IdHolder idHolder = getVolatile(index);
-        if (idHolder != null && casObject(index, idHolder, null)) {
-            // 获取id成功后，判断是否需要重新load一遍缓冲区的分区数据,异步处理
-            if ((index & partitionSizeMask) == 0) {
-                addLoadTask(index);
+        // 这里由于可能受randomNextId()的影响，将重试一定的次
+        int retry = maxRetry + 1;
+        while (retry-- != 0) {
+            int index = nextIndex(true);
+            IdHolder idHolder = getVolatile(index);
+            if (idHolder != null && casObject(index, idHolder, null)) {
+                // 获取id成功后，判断是否需要重新load一遍缓冲区的分区数据,异步处理
+                if ((index & partitionSizeMask) == 0) {
+                    addLoadTask(index);
+                }
+                return idHolder.getValue();
             }
-            return idHolder.getValue();
         }
         // 1.被其他线程抢先捞走了这个格子的数据(只出现在整个缓存行一圈的数据都被同时取走的情况)
+        // 或者受randomNextId()影响
         // 退而求其次，直接从加锁方法获取
         return nextIdRaw();
     }
@@ -159,20 +194,44 @@ public class IdCacheWorker {
         threadPool.execute(new LoadIdTask(currentIndex, partitionSize, buffer));
     }
 
+    private boolean isBusy() {
+        return UidGenerator.isBusy(busyFlag);
+    }
+
     /**
      * 初始化线程池
      */
     private ExecutorService initThreadPool() {
-        ThreadFactory threadFactory = new ThreadFactory() {
+        // 空闲期cache&文件写入线程
+        // 在空闲期，不断获取id写入到缓存队列和文件
+        Executors.newSingleThreadScheduledExecutor()
+                .scheduleWithFixedDelay(() -> {
+                    try {
+                        if (isBusy()) {
+                            return;
+                        }
+                        int count = 0;
+                        long id;
+                        while (true) {
+                            // 每获取1024个元素后检查一下是否busy
+                            if (++count == 1024) {
+                                if (isBusy()) {
+                                    return;
+                                }
+                                count = 0;
+                            }
+                            id = nextIdRaw();
+                            // cache queue已满，则尝试写入到文件
+                            if (!cacheIds.offer(id)) {
 
-            private final AtomicInteger index = new AtomicInteger(0);
+                            }
+                        }
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                }, 2, 1, TimeUnit.SECONDS);
 
-            @Override
-            public Thread newThread(Runnable r) {
-                return new Thread(r, "load-id-to-partition-" + index.incrementAndGet());
-            }
-        };
-
+        // 任务执行线程
         return new ThreadPoolExecutor(1, 1,
                 0L, TimeUnit.MILLISECONDS,
                 new DistinctLinkedBlockingQueue<>(r -> {
@@ -182,13 +241,13 @@ public class IdCacheWorker {
                     LoadIdTask loadIdTask = (LoadIdTask) r;
                     return loadIdTask.getCurrentIndex();
                 }, 16),
-                threadFactory);
+                new InternalThreadFactory("load-id-to-partition"));
     }
 
     /**
      * 原子的获取下个可以使用的index
      * <p>
-     * TODO 这里将是激烈竞争的地方，使用分区的方式分散热点
+     * TODO 这里将是激烈竞争的地方，考虑使用分区的方式分散热点
      */
     private int nextIndex(boolean returnCurrent) {
         while (true) {
@@ -198,6 +257,16 @@ public class IdCacheWorker {
                 return returnCurrent ? current : next;
             }
         }
+    }
+
+    /**
+     * 随机的下一个id
+     * <p>
+     * 伪随机:本质在buffer中随机出一个值来尝试获取
+     */
+    public long randomNextId() {
+
+        return 0;
     }
 
     /**
@@ -224,7 +293,7 @@ public class IdCacheWorker {
         return (n < 0) ? 1 : (n >= MAXIMUM_SIZE) ? MAXIMUM_SIZE : n + 1;
     }
 
-    /******************一下使用Unsafe的cas方法进行缓存区的原子操作*****************************/
+    /******************以下使用Unsafe的cas方法进行缓存区的原子操作*****************************/
 
 
     /**
