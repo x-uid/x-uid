@@ -18,8 +18,23 @@ public class UidGenerator {
 
     private static final IdWorker ID_WORKER = new IdWorker();
 
+    /**
+     * 序列号所占的位数
+     */
+    private static final long SEQUENCE_BITS = 12L;
+
+    /**
+     * 最大序列号
+     */
+    public static final int MAX_SEQUENCE_COUNT = 1 << SEQUENCE_BITS;
+
+
     public static long generateId() {
         return ID_WORKER.nextId();
+    }
+
+    public static long[] generateIds(int count) {
+        return ID_WORKER.batchNextIds(count);
     }
 
     /**
@@ -33,15 +48,12 @@ public class UidGenerator {
 
     /**
      * SnowFlake的结构如下(每部分用-分开):<br>
-     * <<<<<<< HEAD
      * <p>
      * +------+----------------------+----------------+-----------+
      * | sign |     timestamp        | worker node id | sequence  |
      * +------+----------------------+----------------+-----------+
      * 1bit          41bits              10bits         12bits
      * <p>
-     * =======
-     * >>>>>>> 698a1791d9c3d497eecbe0f8f9a901c405238681
      * <br>
      * 0 - 0000000000 0000000000 0000000000 0000000000 0 - 0000000000 - 000000000000 <br>
      * <br>
@@ -66,7 +78,6 @@ public class UidGenerator {
         private static final long START_TIME = 61484889600000L;
 
         /**
-         * <<<<<<< HEAD
          * 时间戳位数
          */
         private static final long TIMESTAMP_BITS = 41;
@@ -77,8 +88,6 @@ public class UidGenerator {
         private static final long MAX_TIMESTAMP = ~(-1L << TIMESTAMP_BITS);
 
         /**
-         * =======
-         * >>>>>>> 698a1791d9c3d497eecbe0f8f9a901c405238681
          * 工作节点标示id所占的位数
          */
         private static final long WORKER_ID_BITS = 10L;
@@ -87,11 +96,6 @@ public class UidGenerator {
          * 最大工作节点的数量
          */
         private static final long MAX_WORKER_ID = ~(-1L << WORKER_ID_BITS);
-
-        /**
-         * 序列号所占的位数
-         */
-        private static final long SEQUENCE_BITS = 12L;
 
         /**
          * 工作节点标示id位移数
@@ -116,7 +120,7 @@ public class UidGenerator {
         /**
          * 序列号
          */
-        private long sequence = 0L;
+        private long sequence = -1L;
 
         /**
          * 上次时间戳
@@ -148,6 +152,13 @@ public class UidGenerator {
         }
 
         public long nextId() {
+            return batchNextIds(1)[0];
+        }
+
+        public long[] batchNextIds(int count) {
+            if (count > MAX_SEQUENCE_COUNT) {
+                throw new RuntimeException("批量获取唯一ID的数量不能超过" + MAX_SEQUENCE_COUNT + "个");
+            }
             lock.lock();
             try {
                 long timestamp;
@@ -165,40 +176,35 @@ public class UidGenerator {
                     } else {
                         workerId = reloadWorkerId();
                         lastTimestamp = timestamp;
-                        sequence = 0L;
-                        return generateId(timestamp, workerId, sequence);
+                        sequence = -1L;
+                        return generateIds(timestamp, workerId, count);
                     }
                 }
-
-                if (diff == 0) {
-                    // 同一毫秒内，进行序列自增
-                    sequence = (sequence + 1) & SEQUENCE_MASK;
-                    if (sequence == 0) {
-                        // 数字溢出了，等待下一个毫秒
-                        timestamp = tilNextMillis(lastTimestamp);
-                    }
-                } else {
-                    // 时间戳改变，毫秒内序列重置
-                    sequence = 0L;
+                // 时间戳改变，毫秒内序列重置
+                if (diff > 0) {
+                    sequence = -1L;
                 }
-                lastTimestamp = timestamp;
-                return generateId(timestamp, workerId, sequence);
+                return generateIds(timestamp, workerId, count);
             } finally {
                 lock.unlock();
             }
         }
 
-        /**
-         * 组装id
-         */
-        private long generateId(long timestamp, long workerId, long sequence) {
+        private long[] generateIds(long timestamp, long workerId, int count) {
             // 超过了时间戳位数的情况
-            if (timestamp > MAX_TIMESTAMP) {
+            if (((sequence + count) >> SEQUENCE_BITS) + timestamp > MAX_TIMESTAMP) {
                 throw new RuntimeException("设置的时间戳位数已经使用到上限");
             }
-            return ((timestamp - START_TIME) << TIMESTAMP_SHIFT)
-                    | (workerId << WORKER_ID_SHIFT)
-                    | sequence;
+            long[] ids = new long[count];
+            for (int i = 0; i < count; i++) {
+                // 同一毫秒内，进行序列自增
+                if ((++sequence & SEQUENCE_MASK) == 0) {
+                    // 数字溢出了，等待下一个毫秒
+                    lastTimestamp = timestamp = tilNextMillis(lastTimestamp);
+                }
+                ids[i] = (workerId << WORKER_ID_SHIFT) | ((timestamp - START_TIME) << TIMESTAMP_SHIFT) | sequence;
+            }
+            return ids;
         }
 
         /**
@@ -251,9 +257,13 @@ public class UidGenerator {
     }
 
     public static void main(String[] args) {
-//        for (int i = 0; i < 10; i++) {
-//            System.out.println(UidGenerator.generateId());
-//        }
+/*        for (int i = 0; i < 10; i++) {
+            System.out.println(UidGenerator.generateId());
+        }*/
+        long[] ids = UidGenerator.generateIds(100);
+        for (int i = 0; i < ids.length; i++) {
+            System.out.println(ids[i]);
+        }
     }
 
 }

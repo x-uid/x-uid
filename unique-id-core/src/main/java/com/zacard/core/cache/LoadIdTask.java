@@ -28,10 +28,12 @@ public class LoadIdTask implements Runnable {
         if (currentIndex == 0) {
             return;
         }
+        // 批量生成partitionSize个唯一ID
+        long[] ids = UidGenerator.generateIds(partitionSize);
+        int firstIndex = currentIndex - partitionSize + 1;
         for (int i = 0; i < partitionSize; i++) {
-            int index = currentIndex - i;
             // 这里不需要原子的设置，其他读的地方会原子的读，保证获取到原子的值
-            buffer[index] = IdHolder.fill(UidGenerator.generateId());
+            buffer[firstIndex + i] = IdHolder.fill(ids[i]);
         }
     }
 

@@ -11,6 +11,10 @@ import java.security.AccessController;
 import java.security.PrivilegedExceptionAction;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
+import java.util.stream.LongStream;
+
+import static com.zacard.core.UidGenerator.MAX_SEQUENCE_COUNT;
 
 /**
  * 缓存部分唯一id
@@ -48,7 +52,7 @@ public class IdCacheWorker {
     /**
      * 默认逻辑分区数量
      */
-    private int DEFAULT_PARTITION_NUMBER = 4;
+    private static final int DEFAULT_PARTITION_NUMBER = 4;
 
     /**
      * 逻辑分区数量
@@ -66,7 +70,7 @@ public class IdCacheWorker {
     private int partitionSizeMask;
 
     /**
-     * 缓存数组
+     * 缓存数组,一级缓存
      */
     private IdHolder[] buffer;
 
@@ -96,9 +100,25 @@ public class IdCacheWorker {
     private int threadPoolQueueSize = 128;
 
     /**
-     * cacha queue，保存原始long型的id
+     * 二级缓存, 数组id缓存队列, 每个元素存放批量获取的long型的id数组
      */
-    private ArrayBlockingQueue<Long> cacheIds;
+    private ConcurrentLinkedQueue<long[]> cacheArrayIds;
+
+    /**
+     * cacheArrayIds队列的最大容量
+     */
+    private static final int MAX_CACHE_ARRAY_QUEUE_SIZE = 1 << 7;
+
+    /**
+     * 二级缓存, 单id缓存队列, 每个元素存放单个获取的long型的id值
+     *
+     */
+    private ConcurrentLinkedQueue<Long> cacheSingleIds;
+
+    /**
+     * cacheSingleIds队列的最大容量
+     */
+    private static final long MAX_CACHE_SINGLE_QUEUE_SIZE = 1 << 20;
 
     /**
      * uid持久化到文件服务
@@ -130,14 +150,25 @@ public class IdCacheWorker {
         // 这里必须保证能整除
         this.partitionSize = threshold / partitionNumber;
         this.partitionSizeMask = partitionSize - 1;
-        this.threadPool = initThreadPool();
-        // 因为在cache queue中，id无缓存行填充，size可以设置的大一点(默认4倍)
-        this.cacheIds = new ArrayBlockingQueue<>(Math.min(threshold << 2, MAXIMUM_SIZE));
+
+        // size大小控制在 MAX_CACHE_ARRAY_QUEUE_SIZE 范围内
+        this.cacheArrayIds = new ConcurrentLinkedQueue<>();
+        // size大小控制在 MAX_CACHE_SINGLE_QUEUE_SIZE 范围内
+        this.cacheSingleIds = new ConcurrentLinkedQueue<>();
+
+        // id文件持久化初始化
+        this.uidPersistence = new UidPersistence();
 
         // 初始化填充缓存区
         fillBuffer();
-        // id文件持久化初始化
-        this.uidPersistence = new UidPersistence();
+        // 初始化单id缓存队列
+        fillCache();
+
+        // 启动定时任务
+        this.scheduleJob();
+        // 初始化线程池
+        this.threadPool = initThreadPool();
+
     }
 
     /**
@@ -147,16 +178,35 @@ public class IdCacheWorker {
      * 因此，这个方法填充的时候没有竞争，不需要使用cas的方式填充
      */
     private void fillBuffer() {
-        for (int i = 0; i < threshold; i++) {
-            buffer[i] = IdHolder.fill(nextIdRaw());
+        int start, count, num = (threshold + MAX_SEQUENCE_COUNT - 1) / MAX_SEQUENCE_COUNT;
+        long[] ids;
+        for (int i = 0; i < num; i++) {
+            start = i * MAX_SEQUENCE_COUNT;
+            count = (i == num - 1) ? threshold - start : MAX_SEQUENCE_COUNT;
+            ids = nextIdRaw(count);
+            for (int j = 0; j < count; j++) {
+                buffer[start + j] = IdHolder.fill(ids[j]);
+            }
         }
     }
 
     /**
-     * 从原始加锁的方式获取下一个id
+     * 填充整个单id缓存
      */
-    private long nextIdRaw() {
-        return UidGenerator.generateId();
+    private void fillCache() {
+        long num = (MAX_CACHE_SINGLE_QUEUE_SIZE - 1) / MAX_SEQUENCE_COUNT;
+        long[] ids;
+        for (long i = 0; i < num; i++) {
+            ids = nextIdRaw(MAX_SEQUENCE_COUNT);
+            cacheSingleIds.addAll(LongStream.of(ids).boxed().collect(Collectors.toList()));
+        }
+    }
+
+    /**
+     * 从原始加锁的方式获取下一批id
+     */
+    private long[] nextIdRaw(int count) {
+        return UidGenerator.generateIds(count);
     }
 
     /**
@@ -165,10 +215,9 @@ public class IdCacheWorker {
      * 这里是无锁，cas代替锁
      */
     public long nextId() {
-        // TODO
         // 0.先尝试去缓存区中获取数据
-        // 这里由于可能受randomNextId()的影响，将重试一定的次
-        int retry = maxRetry + 1;
+        // 这里由于可能受randomNextId()的影响，将重试一定的次数
+        int retry = maxRetry;
         while (retry-- != 0) {
             int index = nextIndex(true);
             IdHolder idHolder = getVolatile(index);
@@ -182,8 +231,10 @@ public class IdCacheWorker {
         }
         // 1.被其他线程抢先捞走了这个格子的数据(只出现在整个缓存行一圈的数据都被同时取走的情况)
         // 或者受randomNextId()影响
-        // 退而求其次，直接从加锁方法获取
-        return nextIdRaw();
+        // 退而求其次，从单id缓存队列中获取
+        Long id = cacheSingleIds.poll();
+        // 如果从缓存队列中获取失败,则直接从加锁方法获取
+        return id == null ? nextIdRaw(1)[0] : id;
     }
 
     /**
@@ -198,39 +249,49 @@ public class IdCacheWorker {
         return UidGenerator.isBusy(busyFlag);
     }
 
-    /**
-     * 初始化线程池
-     */
-    private ExecutorService initThreadPool() {
+    private void scheduleJob() {
         // 空闲期cache&文件写入线程
         // 在空闲期，不断获取id写入到缓存队列和文件
         Executors.newSingleThreadScheduledExecutor()
                 .scheduleWithFixedDelay(() -> {
                     try {
-                        if (isBusy()) {
-                            return;
-                        }
-                        int count = 0;
-                        long id;
+                        long[] ids;
                         while (true) {
-                            // 每获取1024个元素后检查一下是否busy
-                            if (++count == 1024) {
-                                if (isBusy()) {
-                                    return;
-                                }
-                                count = 0;
+                            // 每次获取前检查一下是否busy
+                            if (isBusy()) {
+                                return;
                             }
-                            id = nextIdRaw();
-                            // cache queue已满，则尝试写入到文件
-                            if (!cacheIds.offer(id)) {
-
+                            long cacheSingleDiff;
+                            // 单id的cache queue填充
+                            if ((cacheSingleDiff = MAX_CACHE_SINGLE_QUEUE_SIZE - cacheSingleIds.size()) > 0) {
+                                ids = nextIdRaw((int)(cacheSingleDiff > MAX_SEQUENCE_COUNT ? MAX_SEQUENCE_COUNT : cacheSingleDiff));
+                                cacheSingleIds.addAll(LongStream.of(ids).boxed().collect(Collectors.toList()));
+                            }
+                            // 数组id的cache queue填充
+                            else if (cacheArrayIds.size() < MAX_CACHE_ARRAY_QUEUE_SIZE) {
+                                ids = nextIdRaw(partitionSize);
+                                cacheArrayIds.offer(ids);
+                            }
+                            // 文件未满时,将批量获取的id写入文件
+                            else if (!uidPersistence.isFull()) {
+                                ids = nextIdRaw(partitionSize);
+                                uidPersistence.writeToFile(ids);
+                            }
+                            // 如果所有缓存都存满了,则return掉结束本次任务执行
+                            else {
+                                return;
                             }
                         }
                     } catch (Exception e) {
                         e.printStackTrace();
                     }
-                }, 2, 1, TimeUnit.SECONDS);
+                }, 100, 100, TimeUnit.MILLISECONDS);
+    }
 
+    /**
+     * 初始化线程池
+     */
+    private ExecutorService initThreadPool() {
         // 任务执行线程
         return new ThreadPoolExecutor(1, 1,
                 0L, TimeUnit.MILLISECONDS,

@@ -4,6 +4,7 @@ import java.io.*;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
+import java.util.stream.LongStream;
 
 /**
  * uid 持久化
@@ -68,7 +69,7 @@ public class UidPersistence {
      * @param id uid
      * @return 写入文件后，如果文件满了返回false，否则返回true
      */
-    public boolean writrToFile(long id) {
+    public boolean writeToFile(long id) {
         if (id == 0) {
             return true;
         }
@@ -88,7 +89,25 @@ public class UidPersistence {
         } catch (IOException e) {
             e.printStackTrace();
         }
-        return isFull();
+        return !isFull();
+    }
+
+    public boolean writeToFile(long[] ids) {
+        if (ids.length == 0) {
+            return true;
+        }
+        if (isFull()) {
+            return false;
+        }
+        try (FileWriter writer = new FileWriter(XUID_FILE, true)) {
+            writer.write(LongStream.of(ids).boxed()
+                    .map(Object::toString)
+                    .collect(Collectors.joining(",")) + "\n");
+            writer.flush();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        return !isFull();
     }
 
     /**
