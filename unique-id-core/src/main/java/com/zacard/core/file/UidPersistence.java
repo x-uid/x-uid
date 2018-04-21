@@ -107,6 +107,8 @@ public class UidPersistence {
             FileReader fileReader = new FileReader(XUID_FILE);
             BufferedReader reader = new BufferedReader(fileReader);
             String line = reader.readLine();
+            if (line != null) {
+            }
         } catch (Exception e) {
             e.printStackTrace();
         }
