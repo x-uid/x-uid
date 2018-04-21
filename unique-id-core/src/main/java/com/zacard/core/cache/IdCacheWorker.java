@@ -174,7 +174,7 @@ public class IdCacheWorker {
             IdHolder idHolder = getVolatile(index);
             if (idHolder != null && casObject(index, idHolder, null)) {
                 // 获取id成功后，判断是否需要重新load一遍缓冲区的分区数据,异步处理
-                if ((index & partitionSizeMask) == 0) {
+                if (((index + 1) & partitionSizeMask) == 0) {
                     addLoadTask(index);
                 }
                 return idHolder.getValue();
