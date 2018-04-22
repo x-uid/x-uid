@@ -75,7 +75,7 @@ public class UidGenerator {
         /**
          * 相对于2018-04-20 00:00:00的时间戳
          */
-        private static final long START_TIME = 61484889600000L;
+        private static final long START_TIME = 1524153600000L;
 
         /**
          * 时间戳位数
@@ -85,7 +85,7 @@ public class UidGenerator {
         /**
          * 相对与START_TIME的时间戳最大大小
          */
-        private static final long MAX_TIMESTAMP = ~(-1L << TIMESTAMP_BITS);
+        private static final long MAX_TIMESTAMP = START_TIME + ~(-1L << TIMESTAMP_BITS);
 
         /**
          * 工作节点标示id所占的位数
