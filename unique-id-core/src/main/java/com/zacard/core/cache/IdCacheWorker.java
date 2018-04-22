@@ -9,6 +9,7 @@ import sun.misc.Unsafe;
 import java.lang.reflect.Field;
 import java.security.AccessController;
 import java.security.PrivilegedExceptionAction;
+import java.util.List;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
@@ -92,7 +93,7 @@ public class IdCacheWorker {
     /**
      * 普通nextId重试次数
      */
-    private int maxRetry = 5;
+    private int maxRetry = 6;
 
     /**
      * 线程池队列任务数量
@@ -102,7 +103,8 @@ public class IdCacheWorker {
     /**
      * 二级缓存, 数组id缓存队列, 每个元素存放批量获取的long型的id数组
      */
-    private ConcurrentLinkedQueue<long[]> cacheArrayIds;
+//    private ConcurrentLinkedQueue<long[]> cacheArrayIds;
+    private LinkedBlockingQueue<long[]> cacheArrayIds;
 
     /**
      * cacheArrayIds队列的最大容量
@@ -111,14 +113,14 @@ public class IdCacheWorker {
 
     /**
      * 二级缓存, 单id缓存队列, 每个元素存放单个获取的long型的id值
-     *
      */
-    private ConcurrentLinkedQueue<Long> cacheSingleIds;
+//    private ConcurrentLinkedQueue<Long> cacheSingleIds;
+    private LinkedBlockingQueue<Long> cacheSingleIds;
 
     /**
      * cacheSingleIds队列的最大容量
      */
-    private static final long MAX_CACHE_SINGLE_QUEUE_SIZE = 1 << 20;
+    private static final int MAX_CACHE_SINGLE_QUEUE_SIZE = 1 << 20;
 
     /**
      * uid持久化到文件服务
@@ -130,7 +132,7 @@ public class IdCacheWorker {
      * <p>
      * 等待的线程数
      */
-    private int busyFlag = 4;
+    private int busyFlag = 1;
 
     public IdCacheWorker() {
         this(DEFAULT_BUFFER_SIZE);
@@ -152,9 +154,10 @@ public class IdCacheWorker {
         this.partitionSizeMask = partitionSize - 1;
 
         // size大小控制在 MAX_CACHE_ARRAY_QUEUE_SIZE 范围内
-        this.cacheArrayIds = new ConcurrentLinkedQueue<>();
+        this.cacheArrayIds = new LinkedBlockingQueue<>(MAX_CACHE_ARRAY_QUEUE_SIZE);
         // size大小控制在 MAX_CACHE_SINGLE_QUEUE_SIZE 范围内
-        this.cacheSingleIds = new ConcurrentLinkedQueue<>();
+//        this.cacheSingleIds = new ConcurrentLinkedQueue<>();
+        this.cacheSingleIds = new LinkedBlockingQueue<>(MAX_CACHE_SINGLE_QUEUE_SIZE);
 
         // id文件持久化初始化
         this.uidPersistence = new UidPersistence();
@@ -232,7 +235,12 @@ public class IdCacheWorker {
         // 1.被其他线程抢先捞走了这个格子的数据(只出现在整个缓存行一圈的数据都被同时取走的情况)
         // 或者受randomNextId()影响
         // 退而求其次，从单id缓存队列中获取
-        Long id = cacheSingleIds.poll();
+        Long id = null;
+        try {
+            id = cacheSingleIds.poll(10, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
         // 如果从缓存队列中获取失败,则直接从加锁方法获取
         return id == null ? nextIdRaw(1)[0] : id;
     }
@@ -242,7 +250,12 @@ public class IdCacheWorker {
      * 分区load也进一步减少了竞争
      */
     private void addLoadTask(int currentIndex) {
-        threadPool.execute(new LoadIdTask(currentIndex, partitionSize, buffer));
+        try {
+            threadPool.execute(new LoadIdTask(currentIndex, partitionSize, buffer));
+        } catch (Exception e) {
+            // 这里可能是任务拒绝异常
+            e.printStackTrace();
+        }
     }
 
     private boolean isBusy() {
@@ -252,19 +265,25 @@ public class IdCacheWorker {
     private void scheduleJob() {
         // 空闲期cache&文件写入线程
         // 在空闲期，不断获取id写入到缓存队列和文件
-        Executors.newSingleThreadScheduledExecutor()
+        Executors.newSingleThreadScheduledExecutor(new InternalThreadFactory("queue-job"))
                 .scheduleWithFixedDelay(() -> {
                     try {
                         long[] ids;
+                        int count = 0;
                         while (true) {
+//                            if (++count == 1024) {
+//                                return;
+//                            }
                             // 每次获取前检查一下是否busy
-                            if (isBusy()) {
+                            boolean busy = isBusy();
+                            if (busy) {
                                 return;
                             }
                             long cacheSingleDiff;
                             // 单id的cache queue填充
                             if ((cacheSingleDiff = MAX_CACHE_SINGLE_QUEUE_SIZE - cacheSingleIds.size()) > 0) {
-                                ids = nextIdRaw((int)(cacheSingleDiff > MAX_SEQUENCE_COUNT ? MAX_SEQUENCE_COUNT : cacheSingleDiff));
+                                ids = nextIdRaw(
+                                        (int) (cacheSingleDiff > MAX_SEQUENCE_COUNT ? MAX_SEQUENCE_COUNT : cacheSingleDiff));
                                 cacheSingleIds.addAll(LongStream.of(ids).boxed().collect(Collectors.toList()));
                             }
                             // 数组id的cache queue填充
@@ -286,6 +305,28 @@ public class IdCacheWorker {
                         e.printStackTrace();
                     }
                 }, 100, 100, TimeUnit.MILLISECONDS);
+
+        Executors.newSingleThreadScheduledExecutor(new InternalThreadFactory("read-data-to-queue"))
+                .scheduleWithFixedDelay(() -> {
+                    try {
+                        List<Long> longs = uidPersistence.readIds();
+                        if (longs != null && longs.size() > 0) {
+                            if (cacheArrayIds.size() < MAX_CACHE_ARRAY_QUEUE_SIZE & longs.size() >= 1024) {
+                                long[] e = new long[1024];
+                                for (int i = 0; i < 1024; i++) {
+                                    e[i] = longs.remove(0);
+                                }
+                            }
+                            if (cacheSingleIds.size() < (MAX_CACHE_SINGLE_QUEUE_SIZE)) {
+                                for (Long id : longs) {
+                                    cacheSingleIds.put(id);
+                                }
+                            }
+                        }
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                }, 100, 500, TimeUnit.MILLISECONDS);
     }
 
     /**

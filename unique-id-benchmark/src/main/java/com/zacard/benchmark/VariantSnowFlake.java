@@ -16,12 +16,13 @@ public class VariantSnowFlake {
 
     @Setup
     public void setUp() {
+        System.out.println("cpu核数："+Runtime.getRuntime().availableProcessors());
         System.out.println("开始变种版本的SnowFlake的微基准测试.");
     }
 
     @Threads(value = Threads.MAX)
     @Warmup(iterations = 5, time = 10, timeUnit = TimeUnit.MILLISECONDS)
-    @Measurement(iterations = 1, time = 10, timeUnit = TimeUnit.MILLISECONDS)
+    @Measurement(iterations = 5, time = 10, timeUnit = TimeUnit.MILLISECONDS)
     @Fork(value = 5)
     @Benchmark
     @BenchmarkMode(value = Mode.Throughput)

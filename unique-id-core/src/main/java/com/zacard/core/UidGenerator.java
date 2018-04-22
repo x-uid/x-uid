@@ -43,7 +43,7 @@ public class UidGenerator {
      * @param busyFlag busy的参考基准
      */
     public static boolean isBusy(int busyFlag) {
-        return ID_WORKER.lock.getQueueLength() > Math.min(busyFlag, PROCESSORS + 1);
+        return ID_WORKER.lock.getQueueLength() >= Math.min(busyFlag, PROCESSORS - 1);
     }
 
     /**
