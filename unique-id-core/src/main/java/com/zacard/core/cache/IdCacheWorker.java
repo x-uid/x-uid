@@ -104,7 +104,7 @@ public class IdCacheWorker {
      * 二级缓存, 数组id缓存队列, 每个元素存放批量获取的long型的id数组
      */
 //    private ConcurrentLinkedQueue<long[]> cacheArrayIds;
-    private LinkedBlockingQueue<long[]> cacheArrayIds;
+    private ArrayBlockingQueue<long[]> cacheArrayIds;
 
     /**
      * cacheArrayIds队列的最大容量
@@ -115,7 +115,7 @@ public class IdCacheWorker {
      * 二级缓存, 单id缓存队列, 每个元素存放单个获取的long型的id值
      */
 //    private ConcurrentLinkedQueue<Long> cacheSingleIds;
-    private LinkedBlockingQueue<Long> cacheSingleIds;
+    private ArrayBlockingQueue<Long> cacheSingleIds;
 
     /**
      * cacheSingleIds队列的最大容量
@@ -154,10 +154,10 @@ public class IdCacheWorker {
         this.partitionSizeMask = partitionSize - 1;
 
         // size大小控制在 MAX_CACHE_ARRAY_QUEUE_SIZE 范围内
-        this.cacheArrayIds = new LinkedBlockingQueue<>(MAX_CACHE_ARRAY_QUEUE_SIZE);
+        this.cacheArrayIds = new ArrayBlockingQueue<>(MAX_CACHE_ARRAY_QUEUE_SIZE);
         // size大小控制在 MAX_CACHE_SINGLE_QUEUE_SIZE 范围内
 //        this.cacheSingleIds = new ConcurrentLinkedQueue<>();
-        this.cacheSingleIds = new LinkedBlockingQueue<>(MAX_CACHE_SINGLE_QUEUE_SIZE);
+        this.cacheSingleIds = new ArrayBlockingQueue<>(MAX_CACHE_SINGLE_QUEUE_SIZE);
 
         // id文件持久化初始化
         this.uidPersistence = new UidPersistence();
