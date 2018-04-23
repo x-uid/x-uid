@@ -241,7 +241,7 @@ public class IdCacheWorker {
         } catch (InterruptedException e) {
             e.printStackTrace();
         }
-        // 如果从缓存队列中获取失败,则直接从加锁方法获取
+        // 3.如果从缓存队列中获取失败,则直接从加锁方法获取
         return id == null ? nextIdRaw(1)[0] : id;
     }
 
@@ -316,6 +316,7 @@ public class IdCacheWorker {
                                 for (int i = 0; i < 1024; i++) {
                                     e[i] = longs.remove(0);
                                 }
+                                cacheArrayIds.offer(e);
                             }
                             if (cacheSingleIds.size() < (MAX_CACHE_SINGLE_QUEUE_SIZE)) {
                                 for (Long id : longs) {

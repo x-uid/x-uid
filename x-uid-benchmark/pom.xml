@@ -4,12 +4,11 @@
 
     <parent>
         <groupId>com.zacard</groupId>
-        <artifactId>unique-id</artifactId>
+        <artifactId>x-uid</artifactId>
         <version>1.0.0-SNAPSHOT</version>
     </parent>
 
-    <artifactId>unique-id-benchmark</artifactId>
-    <name>unique-id-benchmark</name>
+    <artifactId>x-uid-benchmark</artifactId>
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -22,7 +21,7 @@
     <dependencies>
         <dependency>
             <groupId>com.zacard</groupId>
-            <artifactId>unique-id-core</artifactId>
+            <artifactId>x-uid-core</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

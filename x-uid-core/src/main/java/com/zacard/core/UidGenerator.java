@@ -171,7 +171,7 @@ public class UidGenerator {
                      *      (1) 如果回拨的时间小于maxTolerateCallbackTime(默认15毫秒),则等待时间赶上lastTimestamp
                      *      (2) 否则重新获取一个更大的workerId并且重置lastTimestamp
                      */
-                    if (diff <= -maxTolerateCallbackTime) {
+                    if (diff + maxTolerateCallbackTime >= 0) {
                         waitForDelay(diff);
                     } else {
                         workerId = reloadWorkerId();

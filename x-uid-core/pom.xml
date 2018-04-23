@@ -4,11 +4,10 @@
 
     <parent>
         <groupId>com.zacard</groupId>
-        <artifactId>unique-id</artifactId>
+        <artifactId>x-uid</artifactId>
         <version>1.0.0-SNAPSHOT</version>
     </parent>
 
-    <artifactId>unique-id-core</artifactId>
-    <name>unique-id-core</name>
+    <artifactId>x-uid-core</artifactId>
 
 </project>

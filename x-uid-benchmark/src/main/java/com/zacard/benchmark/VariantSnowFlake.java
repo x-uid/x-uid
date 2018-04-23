@@ -21,7 +21,7 @@ public class VariantSnowFlake {
     }
 
     @Threads(value = Threads.MAX)
-    @Warmup(iterations = 5, time = 10, timeUnit = TimeUnit.MILLISECONDS)
+    @Warmup(iterations = 3, time = 10, timeUnit = TimeUnit.MILLISECONDS)
     @Measurement(iterations = 5, time = 10, timeUnit = TimeUnit.MILLISECONDS)
     @Fork(value = 5)
     @Benchmark
