@@ -16,7 +16,7 @@ public class VariantSnowFlake {
 
     @Setup
     public void setUp() {
-        System.out.println("cpu核数："+Runtime.getRuntime().availableProcessors());
+        System.out.println("cpu核数：" + Runtime.getRuntime().availableProcessors());
         System.out.println("开始变种版本的SnowFlake的微基准测试.");
     }
 

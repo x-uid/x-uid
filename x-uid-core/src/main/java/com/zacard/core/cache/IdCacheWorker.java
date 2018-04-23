@@ -123,6 +123,12 @@ public class IdCacheWorker {
     private static final int MAX_CACHE_SINGLE_QUEUE_SIZE = 1 << 20;
 
     /**
+     * 启动初始化花费几秒写入di到文件
+     * 1s ≈ 4096000个id
+     */
+    private static final int INIT_FILE_SECOND = 5;
+
+    /**
      * uid持久化到文件服务
      */
     private UidPersistence uidPersistence;
@@ -166,6 +172,8 @@ public class IdCacheWorker {
         fillBuffer();
         // 初始化单id缓存队列
         fillCache();
+        // 初始化填充文件数据
+        initPadFile();
 
         // 启动定时任务
         this.scheduleJob();
@@ -251,7 +259,7 @@ public class IdCacheWorker {
      */
     private void addLoadTask(int currentIndex) {
         try {
-            threadPool.execute(new LoadIdTask(currentIndex, partitionSize, buffer));
+            threadPool.execute(new LoadIdTask(currentIndex, partitionSize, buffer, cacheArrayIds));
         } catch (Exception e) {
             // 这里可能是任务拒绝异常
             e.printStackTrace();
@@ -265,15 +273,11 @@ public class IdCacheWorker {
     private void scheduleJob() {
         // 空闲期cache&文件写入线程
         // 在空闲期，不断获取id写入到缓存队列和文件
-        Executors.newSingleThreadScheduledExecutor(new InternalThreadFactory("queue-job"))
+        Executors.newSingleThreadScheduledExecutor(new InternalThreadFactory("cache-push-job"))
                 .scheduleWithFixedDelay(() -> {
                     try {
                         long[] ids;
-                        int count = 0;
                         while (true) {
-//                            if (++count == 1024) {
-//                                return;
-//                            }
                             // 每次获取前检查一下是否busy
                             boolean busy = isBusy();
                             if (busy) {
@@ -311,14 +315,14 @@ public class IdCacheWorker {
                     try {
                         List<Long> longs = uidPersistence.readIds();
                         if (longs != null && longs.size() > 0) {
-                            if (cacheArrayIds.size() < MAX_CACHE_ARRAY_QUEUE_SIZE & longs.size() >= 1024) {
-                                long[] e = new long[1024];
-                                for (int i = 0; i < 1024; i++) {
+                            if (cacheArrayIds.size() < MAX_CACHE_ARRAY_QUEUE_SIZE && longs.size() >= partitionSize) {
+                                long[] e = new long[partitionSize];
+                                for (int i = 0; i < partitionSize; i++) {
                                     e[i] = longs.remove(0);
                                 }
-                                cacheArrayIds.offer(e);
+                                cacheArrayIds.put(e);
                             }
-                            if (cacheSingleIds.size() < (MAX_CACHE_SINGLE_QUEUE_SIZE)) {
+                            if (cacheSingleIds.size() < MAX_CACHE_SINGLE_QUEUE_SIZE) {
                                 for (Long id : longs) {
                                     cacheSingleIds.put(id);
                                 }
@@ -345,6 +349,15 @@ public class IdCacheWorker {
                     return loadIdTask.getCurrentIndex();
                 }, 16),
                 new InternalThreadFactory("load-id-to-partition"));
+    }
+
+    /**
+     * 初始化填充文件内容
+     */
+    private void initPadFile() {
+        for (int i = 0; i < INIT_FILE_SECOND; i++) {
+            uidPersistence.writeToFile(nextIdRaw(MAX_SEQUENCE_COUNT));
+        }
     }
 
     /**

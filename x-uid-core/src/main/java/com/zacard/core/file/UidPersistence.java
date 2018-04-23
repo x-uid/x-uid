@@ -4,6 +4,7 @@ import java.io.*;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
+import java.util.stream.LongStream;
 
 /**
  * uid 持久化
@@ -101,15 +102,9 @@ public class UidPersistence {
             return false;
         }
         try (FileWriter writer = new FileWriter(XUID_FILE, true)) {
-            StringBuilder line = new StringBuilder(2048);
-            for (long id : ids) {
-                line.append(",").append(id);
-            }
-            String lineStr = line.substring(1) + "\n";
-            writer.write(lineStr);
-/*            writer.write(LongStream.of(ids).boxed()
+            writer.write(LongStream.of(ids).boxed()
                     .map(Object::toString)
-                    .collect(Collectors.joining(",")) + "\n");*/
+                    .collect(Collectors.joining(",")) + "\n");
             writer.flush();
         } catch (IOException e) {
             e.printStackTrace();

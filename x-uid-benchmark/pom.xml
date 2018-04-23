@@ -9,6 +9,7 @@
     </parent>
 
     <artifactId>x-uid-benchmark</artifactId>
+    <name>x-uid-benchmark</name>
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>

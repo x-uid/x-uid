@@ -9,5 +9,6 @@
     </parent>
 
     <artifactId>x-uid-core</artifactId>
+    <name>x-uid-core</name>
 
 </project>
