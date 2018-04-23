@@ -288,7 +288,11 @@ public class IdCacheWorker {
                             if ((cacheSingleDiff = MAX_CACHE_SINGLE_QUEUE_SIZE - cacheSingleIds.size()) > 0) {
                                 ids = nextIdRaw(
                                         (int) (cacheSingleDiff > MAX_SEQUENCE_COUNT ? MAX_SEQUENCE_COUNT : cacheSingleDiff));
-                                cacheSingleIds.addAll(LongStream.of(ids).boxed().collect(Collectors.toList()));
+                                // 由于有个读取文件的线程可能会在这个时候填充这个queue，这里用addAll可能会报错
+//                                cacheSingleIds.addAll(LongStream.of(ids).boxed().collect(Collectors.toList()));
+                                for (long id : ids) {
+                                    cacheSingleIds.offer(id);
+                                }
                             }
                             // 数组id的cache queue填充
                             else if (cacheArrayIds.size() < MAX_CACHE_ARRAY_QUEUE_SIZE) {

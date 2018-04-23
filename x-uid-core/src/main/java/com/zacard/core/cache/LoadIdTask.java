@@ -3,7 +3,6 @@ package com.zacard.core.cache;
 import com.zacard.core.UidGenerator;
 
 import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.TimeUnit;
 
 /**
  * @author guoqw
@@ -38,11 +37,12 @@ public class LoadIdTask implements Runnable {
         // 批量生成partitionSize个唯一ID
         // 优先去二级缓存--queue里面取数据
         long[] ids = null;
-//        try {
-//            ids = queue.poll(10, TimeUnit.MILLISECONDS);
-//        } catch (InterruptedException e) {
-//            e.printStackTrace();
-//        }
+/*        try {
+            ids = queue.poll(10, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }*/
+        ids = queue.poll();
         if (ids == null) {
             ids = UidGenerator.generateIds(partitionSize);
         }
