@@ -83,7 +83,7 @@ public class UidGenerator {
         private static final long TIMESTAMP_BITS = 41;
 
         /**
-         * 相对与START_TIME的时间戳最大大小
+         * 相对于START_TIME的时间戳最大大小
          */
         private static final long MAX_TIMESTAMP = START_TIME + ~(-1L << TIMESTAMP_BITS);
 

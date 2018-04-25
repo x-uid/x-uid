@@ -9,7 +9,7 @@ public class RawSnowFlake {
     /**
      * 相对于2018-04-20 00:00:00的时间戳
      */
-    private static final long START_TIME = 61484889600000L;
+    private static final long START_TIME = 1524153600000L;
 
     /**
      * 时间戳位数
@@ -17,9 +17,9 @@ public class RawSnowFlake {
     private static final long TIMESTAMP_BITS = 41;
 
     /**
-     * 相对与START_TIME的时间戳最大大小
+     * 相对于START_TIME的时间戳最大大小
      */
-    private static final long MAX_TIMESTAMP = ~(-1L << TIMESTAMP_BITS);
+    private static final long MAX_TIMESTAMP = START_TIME + ~(-1L << TIMESTAMP_BITS);
 
     /**
      * 工作节点标示id所占的位数
@@ -64,17 +64,8 @@ public class RawSnowFlake {
     /**
      * 上次时间戳
      */
-    private volatile long lastTimestamp = -1L;
+    private long lastTimestamp = -1L;
 
-    /**
-     * 默认最大容忍回拨时间15毫秒
-     */
-    private static final long DEFAULT_MAX_TOLERATE_CALLBACK_TIME = 15;
-
-    /**
-     * 最大容忍回拨的毫秒时间
-     */
-    private long maxTolerateCallbackTime = DEFAULT_MAX_TOLERATE_CALLBACK_TIME;
 
     public RawSnowFlake() {
         this(0);
